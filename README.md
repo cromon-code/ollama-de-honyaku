@@ -1,5 +1,7 @@
 # Ollama de Honyaku
 
+https://github.com/user-attachments/assets/a3f90751-5ae0-4055-8442-54140c0032f6
+
 ローカルで動作する Ollama を利用して、テキストおよび Markdown ファイルを翻訳するデスクトップアプリケーションです。
 
 ## 機能
@@ -53,7 +55,12 @@ qwen:2.5:latest(7b) をWindowsPCで使用
 
 ### 原文
 
-`````md# Ollama de Honyaku Test
+`````md
+
+
+https://github.com/user-attachments/assets/020e781b-ede7-45fc-8724-8cb0214d85c1
+
+# Ollama de Honyaku Test
 
 Ollama de Honyaku is a fast and secure local document translator built with Tauri 2 and Rust.
 
