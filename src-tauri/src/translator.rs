@@ -108,11 +108,32 @@ pub fn derive_output_path(input_path: &str, target_lang: &str) -> PathBuf {
         _ => "translated",
     };
 
-    let new_filename = format!("{}.{}.{}", stem, lang_tag, ext);
-    if let Some(parent) = path.parent() {
-        parent.join(new_filename)
+    let base_name = format!("{}.{}", stem, lang_tag);
+    let parent = path.parent();
+
+    let initial_path = if let Some(p) = parent {
+        p.join(format!("{}.{}", base_name, ext))
     } else {
-        PathBuf::from(new_filename)
+        PathBuf::from(format!("{}.{}", base_name, ext))
+    };
+
+    if !initial_path.exists() {
+        return initial_path;
+    }
+
+    let mut count = 1;
+    loop {
+        let numbered_name = format!("{} ({}).{}", base_name, count, ext);
+        let candidate = if let Some(p) = parent {
+            p.join(&numbered_name)
+        } else {
+            PathBuf::from(&numbered_name)
+        };
+
+        if !candidate.exists() {
+            return candidate;
+        }
+        count += 1;
     }
 }
 
@@ -363,4 +384,38 @@ pub async fn translate_file(
     );
 
     Ok(output_path)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_derive_output_path_increment() {
+        let temp_dir = std::env::temp_dir();
+        let unique_stem = format!("test_translation_derive_{}", std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos());
+        let test_input = temp_dir.join(format!("{}.txt", unique_stem));
+
+        // Candidate 1: test_input.ja.txt (does not exist yet)
+        let path1 = derive_output_path(test_input.to_str().unwrap(), "Japanese");
+        assert_eq!(path1, temp_dir.join(format!("{}.ja.txt", unique_stem)));
+
+        // Create path1 file on disk
+        std::fs::write(&path1, b"hello").unwrap();
+
+        // Candidate 2: test_input.ja (1).txt
+        let path2 = derive_output_path(test_input.to_str().unwrap(), "Japanese");
+        assert_eq!(path2, temp_dir.join(format!("{}.ja (1).txt", unique_stem)));
+
+        // Create path2 file on disk
+        std::fs::write(&path2, b"hello 2").unwrap();
+
+        // Candidate 3: test_input.ja (2).txt
+        let path3 = derive_output_path(test_input.to_str().unwrap(), "Japanese");
+        assert_eq!(path3, temp_dir.join(format!("{}.ja (2).txt", unique_stem)));
+
+        // Clean up
+        let _ = std::fs::remove_file(path1);
+        let _ = std::fs::remove_file(path2);
+    }
 }
