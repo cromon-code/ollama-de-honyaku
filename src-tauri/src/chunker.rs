@@ -169,6 +169,16 @@ pub fn build_chunk_blocks(
         }
     };
 
+    let is_heading = |line: &str| {
+        let trimmed = line.trim_start();
+        trimmed.starts_with("# ")
+            || trimmed.starts_with("## ")
+            || trimmed.starts_with("### ")
+            || trimmed.starts_with("#### ")
+            || trimmed.starts_with("##### ")
+            || trimmed.starts_with("###### ")
+    };
+
     for raw_line in lines {
         if let Some(c_char) = fence_char {
             // Currently inside a 3-fence code block. Keep collecting lines until matching 3-fence
@@ -198,6 +208,10 @@ pub fn build_chunk_blocks(
             // Empty line breaks chunk boundary
             flush_current_chunk(&mut current_lines, &mut current_char_count, &mut blocks);
             blocks.push(BlockItem::EmptyLine);
+        } else if is_heading(raw_line) {
+            // Heading line (# to ######): Flush pending lines and emit heading as a standalone chunk
+            flush_current_chunk(&mut current_lines, &mut current_char_count, &mut blocks);
+            blocks.push(BlockItem::Chunk(raw_line.clone()));
         } else {
             // Non-empty line. First check if this single line exceeds max_chunk_size
             let sub_lines = split_long_line(raw_line, max_chunk_size);
@@ -505,5 +519,26 @@ mod tests {
         assert_eq!(blocks[3], BlockItem::CodeBlock("```bash\necho 123\n```".to_string()));
         assert_eq!(blocks[4], BlockItem::Chunk("Line 5".to_string()));
         assert_eq!(blocks[5], BlockItem::CodeBlock("````".to_string()));
+    }
+
+    #[test]
+    fn test_heading_isolation_with_high_granularity() {
+        let lines = vec![
+            "# Heading 1".to_string(),
+            "Paragraph 1 line A".to_string(),
+            "Paragraph 1 line B".to_string(),
+            "## Heading 2".to_string(),
+            "Paragraph 2 line A".to_string(),
+            "Paragraph 2 line B".to_string(),
+        ];
+
+        // High granularity (10) should merge paragraph lines, but MUST keep headings (# / ##) as standalone chunks!
+        let blocks = build_chunk_blocks(&lines, 10, 5000);
+
+        assert_eq!(blocks.len(), 4);
+        assert_eq!(blocks[0], BlockItem::Chunk("# Heading 1".to_string()));
+        assert_eq!(blocks[1], BlockItem::Chunk("Paragraph 1 line A\nParagraph 1 line B".to_string()));
+        assert_eq!(blocks[2], BlockItem::Chunk("## Heading 2".to_string()));
+        assert_eq!(blocks[3], BlockItem::Chunk("Paragraph 2 line A\nParagraph 2 line B".to_string()));
     }
 }
