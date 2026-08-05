@@ -132,24 +132,18 @@ async fn translate_chunk(
 
     let masked_input = mask_protected_tokens(text);
 
-    let mut system_prompt = match &config.system_prompt {
+    let system_prompt = match &config.system_prompt {
         Some(prompt) if !prompt.trim().is_empty() => prompt
             .replace("{source_lang}", &src_desc)
             .replace("{target_lang}", &config.target_lang),
         _ => format!(
-            "You are a professional text translator. Translate the given text from {} into {}.\n\
-            Strict Guidelines:\n\
-            - Return ONLY the translation result. No explanations, intro/outro, or quote wrappers.\n\
-            - Preserve original line breaks, markdown structure, code blocks, URLs, and formatting.\n\
-            - Do NOT translate or alter placeholders in the format `__PROTECTED_N__`.\n\
-            - Maintain style and tone accurately.",
+            "Translate the text from {} to {}.\n\n\
+            Rules:\n\
+            - Output ONLY the translation. No explanations, intro, or outro.\n\
+            - Keep markdown formatting, line breaks, and `__PROTECTED_N__` placeholders unchanged.",
             src_desc, config.target_lang
         ),
     };
-
-    if !masked_input.placeholders.is_empty() && !system_prompt.contains("__PROTECTED_") {
-        system_prompt.push_str("\n- Do NOT translate, alter, or omit placeholders in the format `__PROTECTED_N__`.");
-    }
 
     let payload = OllamaChatRequest {
         model: config.model.clone(),

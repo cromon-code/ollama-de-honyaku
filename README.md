@@ -45,3 +45,89 @@ npm tauri build
 | 最大チャンクサイズ | 1チャンクの最大文字数 | `3000` |
 | 自動リトライ回数 | 通信エラー時の再試行回数 | `0` |
 | Temperature | 生成の温度パラメータ | `0.3` |
+
+
+## 翻訳サンプル
+
+qwen:2.5:latest(7b) をWindowsPCで使用
+
+### 原文
+
+`````md
+# Ollama de Honyaku Test
+
+Ollama de Honyaku is a fast and secure local document translator built with Tauri 2 and Rust.
+
+> Note: Translation quality and speed depend on the selected local LLM model and hardware performance.
+
+## Key Protection Features
+
+- **Code Block Bypass**: Whole blocks surrounded by ```bash ... ``` are completely bypassed from LLM translation.
+- **Inline Code Protection**: Tokens like `test`, `pnpm tauri dev`, and `ollama run gemma2` are safely masked with placeholders.
+- **URL Protection**: Links like https://github.com/ollama/ollama remain completely untouched.
+
+### Nested Markdown Sample (4 Backticks)
+
+````markdown
+# Sample Markdown Guide
+
+This section is an outer Markdown guide wrapped in 4 backticks.
+
+```bash
+# Internal code block (protected)
+ollama run gemma2
+```
+
+The header and text above should be translated, while the internal bash command remains intact.
+
+````
+
+Run `npm tauri dev` to test the application locally!
+
+`````
+
+### 翻訳結果
+
+`````md
+# オラマデホンヤクテスト
+
+Ollama de HonyakuはTauri 2とRustで構築された高速かつ安全なローカルドキュメント翻訳ソフトウェアです。
+
+> 注：翻訳の品質と速度は、選択されたローカルLLMモデルおよびハードウェア性能に依存します。
+
+## キー保護機能
+
+- **コードブロックバイパス**: ```bash ... ``` で囲まれた全ブロックはLLM翻訳から完全に除外されます。
+- **インラインコード保護**: `test`, `pnpm tauri dev`, 以及 `ollama run gemma2` 这样的标记被安全地用占位符掩护了。
+- **URL Protection**: リンク如きhttps://github.com/ollama/ollamaは完全に unchanged に保たれます。
+
+### ネストされたマークダウンサンプル（4つのバックティック）
+
+```markdown
+Strict Guidelines:
+- Return ONLY the translation result. No explanations, intro/outro, or quote wrappers.
+- Preserve original line breaks, markdown structure, code blocks, URLs, and formatting.
+- Do NOT translate or alter placeholders in the format `__PROTECTED_N__`.
+- Maintain style and tone accurately.
+```
+# サンプル マークダウンガイド
+
+このセクションは、4つのバックティックで囲まれた外側のMarkdownガイドです。
+
+```bash
+# Internal code block (protected)
+ollama run gemma2
+```
+
+Strict Guidelines:
+- Return ONLY the translation result. No explanations, intro/outro, or quote wrappers.
+- 行頭と上記のテキストを翻訳し、内部のbashコマンドはそのままに保つ。
+- 原文の改行やマークダウン構造、コードブロック、URL、およびフォーマットを保持する。
+- `__PROTECTED_N__` 形式的なプレースホルダーは翻訳せずに残す。
+- 精度を保ちながらスタイルとトーンも維持する。
+
+```
+
+ローカルでアプリケーションをテストするには `npm tauri dev` を実行してください！
+
+`````

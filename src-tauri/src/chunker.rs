@@ -132,7 +132,8 @@ pub fn build_chunk_blocks(
     let mut current_lines: Vec<String> = Vec::new();
     let mut current_char_count = 0;
 
-    let mut in_code_block = false;
+    let mut fence_char: Option<char> = None;
+    let mut fence_length: usize = 0;
     let mut current_code_block_lines: Vec<String> = Vec::new();
 
     let flush_current_chunk = |current_lines: &mut Vec<String>,
@@ -155,25 +156,44 @@ pub fn build_chunk_blocks(
         }
     };
 
-    let is_fence = |line: &str| {
+    let parse_fence = |line: &str| -> Option<(char, usize)> {
         let trimmed = line.trim_start();
-        // Only 3 backticks (```) or 3 tildes (~~~) start/end a non-translatable code block.
-        // 4 or more backticks (e.g. ````) are treated as outer markdown container lines and allowed for translation.
-        (trimmed.starts_with("```") && !trimmed.starts_with("````"))
-            || (trimmed.starts_with("~~~") && !trimmed.starts_with("~~~~"))
+        if trimmed.starts_with("```") {
+            let count = trimmed.chars().take_while(|&c| c == '`').count();
+            Some(('`', count))
+        } else if trimmed.starts_with("~~~") {
+            let count = trimmed.chars().take_while(|&c| c == '~').count();
+            Some(('~', count))
+        } else {
+            None
+        }
     };
 
     for raw_line in lines {
-        if in_code_block {
+        if let Some(c_char) = fence_char {
+            // Currently inside a 3-fence code block. Keep collecting lines until matching 3-fence
             current_code_block_lines.push(raw_line.clone());
-            if is_fence(raw_line) {
-                flush_code_block(&mut current_code_block_lines, &mut blocks);
-                in_code_block = false;
+
+            if let Some((f_char, f_len)) = parse_fence(raw_line) {
+                if f_char == c_char && f_len == fence_length {
+                    flush_code_block(&mut current_code_block_lines, &mut blocks);
+                    fence_char = None;
+                    fence_length = 0;
+                }
             }
-        } else if is_fence(raw_line) {
+        } else if let Some((f_char, f_len)) = parse_fence(raw_line) {
             flush_current_chunk(&mut current_lines, &mut current_char_count, &mut blocks);
-            in_code_block = true;
-            current_code_block_lines.push(raw_line.clone());
+
+            if f_len == 3 {
+                // Exactly 3 backticks/tildes (``` or ~~~): Start capturing code block to bypass LLM translation
+                fence_char = Some(f_char);
+                fence_length = f_len;
+                current_code_block_lines.push(raw_line.clone());
+            } else {
+                // 4 or more backticks/tildes (e.g. ````markdown):
+                // Pass this 4-fence line as a standalone untranslated item, allowing inner text lines to be translated!
+                blocks.push(BlockItem::CodeBlock(raw_line.clone()));
+            }
         } else if is_empty_line(raw_line) {
             // Empty line breaks chunk boundary
             flush_current_chunk(&mut current_lines, &mut current_char_count, &mut blocks);
@@ -204,7 +224,7 @@ pub fn build_chunk_blocks(
         }
     }
 
-    if in_code_block {
+    if fence_char.is_some() {
         flush_code_block(&mut current_code_block_lines, &mut blocks);
     } else {
         flush_current_chunk(&mut current_lines, &mut current_char_count, &mut blocks);
@@ -413,9 +433,10 @@ mod tests {
     }
 
     #[test]
-    fn test_four_backticks_nested_markdown() {
+    fn test_four_or_more_backticks_nested_markdown() {
         let lines = vec![
-            "````".to_string(),
+            "`````md".to_string(),
+            "````markdown".to_string(),
             "# sample header".to_string(),
             "".to_string(),
             "this is sample code".to_string(),
@@ -424,15 +445,65 @@ mod tests {
             "sample command".to_string(),
             "```".to_string(),
             "````".to_string(),
+            "`````".to_string(),
         ];
 
         let blocks = build_chunk_blocks(&lines, 1, 1000);
-        // ```` and `# sample header` and `this is sample code` are Chunks for translation,
-        // while ```bash ... ``` is a protected CodeBlock
-        let code_blocks: Vec<&BlockItem> = blocks.iter().filter(|b| matches!(b, BlockItem::CodeBlock(_))).collect();
-        assert_eq!(code_blocks.len(), 1);
-        if let BlockItem::CodeBlock(ref content) = code_blocks[0] {
-            assert_eq!(content, "```bash\nsample command\n```");
+        // `````md, ````markdown, ````, ````` are standalone untranslated CodeBlocks.
+        // `# sample header` and `this is sample code` are Chunks to be translated by LLM!
+        // ```bash ... ``` is captured as a 3-fence protected CodeBlock (not sent to LLM).
+
+        let chunks: Vec<&BlockItem> = blocks.iter().filter(|b| matches!(b, BlockItem::Chunk(_))).collect();
+        assert_eq!(chunks.len(), 2);
+        if let BlockItem::Chunk(ref c) = chunks[0] {
+            assert_eq!(c, "# sample header");
         }
+        if let BlockItem::Chunk(ref c) = chunks[1] {
+            assert_eq!(c, "this is sample code");
+        }
+
+        let code_blocks: Vec<&BlockItem> = blocks.iter().filter(|b| matches!(b, BlockItem::CodeBlock(_))).collect();
+        assert_eq!(code_blocks.len(), 5);
+        if let BlockItem::CodeBlock(ref c) = code_blocks[0] {
+            assert_eq!(c, "`````md");
+        }
+        if let BlockItem::CodeBlock(ref c) = code_blocks[1] {
+            assert_eq!(c, "````markdown");
+        }
+        if let BlockItem::CodeBlock(ref c) = code_blocks[2] {
+            assert_eq!(c, "```bash\nsample command\n```");
+        }
+        if let BlockItem::CodeBlock(ref c) = code_blocks[3] {
+            assert_eq!(c, "````");
+        }
+        if let BlockItem::CodeBlock(ref c) = code_blocks[4] {
+            assert_eq!(c, "`````");
+        }
+    }
+
+    #[test]
+    fn test_fence_isolation_with_high_granularity() {
+        let lines = vec![
+            "Line 1".to_string(),
+            "Line 2".to_string(),
+            "````markdown".to_string(),
+            "Line 3".to_string(),
+            "Line 4".to_string(),
+            "```bash".to_string(),
+            "echo 123".to_string(),
+            "```".to_string(),
+            "Line 5".to_string(),
+            "````".to_string(),
+        ];
+
+        // Even with high granularity (e.g. 10 lines merged), fence lines must NEVER be merged with regular text lines!
+        let blocks = build_chunk_blocks(&lines, 10, 5000);
+
+        assert_eq!(blocks[0], BlockItem::Chunk("Line 1\nLine 2".to_string()));
+        assert_eq!(blocks[1], BlockItem::CodeBlock("````markdown".to_string()));
+        assert_eq!(blocks[2], BlockItem::Chunk("Line 3\nLine 4".to_string()));
+        assert_eq!(blocks[3], BlockItem::CodeBlock("```bash\necho 123\n```".to_string()));
+        assert_eq!(blocks[4], BlockItem::Chunk("Line 5".to_string()));
+        assert_eq!(blocks[5], BlockItem::CodeBlock("````".to_string()));
     }
 }
