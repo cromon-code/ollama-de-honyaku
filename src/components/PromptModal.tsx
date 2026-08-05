@@ -146,9 +146,9 @@ export const PromptModal: React.FC<PromptModalProps> = ({
 
           <button
             onClick={onClose}
-            className="bg-indigo-600 hover:bg-indigo-500 text-white font-medium text-xs px-5 py-2 rounded-xl shadow-lg shadow-indigo-600/20 transition-all cursor-pointer"
+            className="bg-slate-800 hover:bg-slate-700 text-slate-200 font-medium text-xs px-5 py-2 rounded-xl border border-slate-700/60 transition-all cursor-pointer"
           >
-            完了
+            閉じる
           </button>
         </div>
       </div>
