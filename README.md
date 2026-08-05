@@ -53,8 +53,7 @@ qwen:2.5:latest(7b) をWindowsPCで使用
 
 ### 原文
 
-`````md
-# Ollama de Honyaku Test
+`````md# Ollama de Honyaku Test
 
 Ollama de Honyaku is a fast and secure local document translator built with Tauri 2 and Rust.
 
@@ -89,44 +88,33 @@ Run `npm tauri dev` to test the application locally!
 ### 翻訳結果
 
 `````md
-# オラマデホンヤクテスト
+# オルマハーニャクテスト
 
 Ollama de HonyakuはTauri 2とRustで構築された高速かつ安全なローカルドキュメント翻訳ソフトウェアです。
 
-> 注：翻訳の品質と速度は、選択されたローカルLLMモデルおよびハードウェア性能に依存します。
+> 注：翻訳の品質と速度は、選択されたローカルLLMモデルやハードウェアの性能に依存します。
 
 ## キー保護機能
 
-- **コードブロックバイパス**: ```bash ... ``` で囲まれた全ブロックはLLM翻訳から完全に除外されます。
-- **インラインコード保護**: `test`, `pnpm tauri dev`, 以及 `ollama run gemma2` 这样的标记被安全地用占位符掩护了。
-- **URL Protection**: リンク如きhttps://github.com/ollama/ollamaは完全に unchanged に保たれます。
+- **コードブロックバイパス**: ```bash ... ``` で囲まれた全ブロックは、LLM翻訳から完全に除外されます。
+- **インラインコード保護**: テキスト内の`test`、`pnpm tauri dev`、`ollama run gemma2`などのトークンは、プレースホルダーで置き換えられています。
+- **URL保護**: リンク_like https://github.com/ollama/ollama は完全に変更されません。
 
 ### ネストされたマークダウンサンプル（4つのバックティック）
 
-```markdown
-Strict Guidelines:
-- Return ONLY the translation result. No explanations, intro/outro, or quote wrappers.
-- Preserve original line breaks, markdown structure, code blocks, URLs, and formatting.
-- Do NOT translate or alter placeholders in the format `__PROTECTED_N__`.
-- Maintain style and tone accurately.
-```
-# サンプル マークダウンガイド
+````markdown
+# マークダウン GUIDE
 
-このセクションは、4つのバックティックで囲まれた外側のMarkdownガイドです。
+このセクションは4つのバックティックで囲まれた外部Markdownガイドです。
 
 ```bash
 # Internal code block (protected)
 ollama run gemma2
 ```
 
-Strict Guidelines:
-- Return ONLY the translation result. No explanations, intro/outro, or quote wrappers.
-- 行頭と上記のテキストを翻訳し、内部のbashコマンドはそのままに保つ。
-- 原文の改行やマークダウン構造、コードブロック、URL、およびフォーマットを保持する。
-- `__PROTECTED_N__` 形式的なプレースホルダーは翻訳せずに残す。
-- 精度を保ちながらスタイルとトーンも維持する。
+上のヘッダーとテキストを日本語に翻訳し、内部のbashコマンドはそのままにします。
 
-```
+````
 
 ローカルでアプリケーションをテストするには `npm tauri dev` を実行してください！
 
