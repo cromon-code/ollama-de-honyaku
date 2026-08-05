@@ -157,7 +157,10 @@ pub fn build_chunk_blocks(
 
     let is_fence = |line: &str| {
         let trimmed = line.trim_start();
-        trimmed.starts_with("```") || trimmed.starts_with("~~~")
+        // Only 3 backticks (```) or 3 tildes (~~~) start/end a non-translatable code block.
+        // 4 or more backticks (e.g. ````) are treated as outer markdown container lines and allowed for translation.
+        (trimmed.starts_with("```") && !trimmed.starts_with("````"))
+            || (trimmed.starts_with("~~~") && !trimmed.starts_with("~~~~"))
     };
 
     for raw_line in lines {
@@ -265,7 +268,7 @@ pub fn mask_protected_tokens(text: &str) -> MaskedText {
     // 1. Mask inline code
     for cap in inline_code_re.find_iter(text) {
         let orig = cap.as_str().to_string();
-        let placeholder = format!("__PROTECTED_TOKEN_{}__", count);
+        let placeholder = format!("__PROTECTED_{}__", count);
         count += 1;
         placeholders.push((placeholder, orig));
     }
@@ -278,10 +281,10 @@ pub fn mask_protected_tokens(text: &str) -> MaskedText {
     let temp_string = masked_string.clone();
     for cap in url_re.find_iter(&temp_string) {
         let orig = cap.as_str().to_string();
-        if orig.contains("__PROTECTED_TOKEN_") {
+        if orig.contains("__PROTECTED_") {
             continue;
         }
-        let placeholder = format!("__PROTECTED_TOKEN_{}__", count);
+        let placeholder = format!("__PROTECTED_{}__", count);
         count += 1;
         masked_string = masked_string.replace(orig.as_str(), placeholder.as_str());
         placeholders.push((placeholder, orig));
@@ -293,12 +296,35 @@ pub fn mask_protected_tokens(text: &str) -> MaskedText {
     }
 }
 
-/// Restore original tokens from placeholders after translation
+/// Restore original tokens from placeholders after translation, with fuzzy regex matching for LLM variations (e.g. __PROTECTED_0__, __PROTECTED0__)
 pub fn restore_protected_tokens(masked_text: &str, placeholders: &[(String, String)]) -> String {
+    if placeholders.is_empty() {
+        return masked_text.to_string();
+    }
+
     let mut restored = masked_text.to_string();
+
+    // 1. Exact match replacement
     for (placeholder, orig) in placeholders {
         restored = restored.replace(placeholder, orig);
     }
+
+    // 2. Fuzzy regex replacement if LLM altered the token (e.g. removed underscores, altered spacing or casing)
+    if let Ok(fuzzy_re) = regex::Regex::new(r"(?i)__\s*PROTECTED[_\s]*(\d+)\s*__") {
+        restored = fuzzy_re
+            .replace_all(&restored, |caps: &regex::Captures| {
+                if let Some(num_match) = caps.get(1) {
+                    if let Ok(idx) = num_match.as_str().parse::<usize>() {
+                        if idx < placeholders.len() {
+                            return placeholders[idx].1.clone();
+                        }
+                    }
+                }
+                caps[0].to_string()
+            })
+            .to_string();
+    }
+
     restored
 }
 
@@ -372,11 +398,41 @@ mod tests {
     fn test_mask_and_restore_protected_tokens() {
         let original = "Run `ollama run gemma2` or check https://example.com for `test` info.";
         let masked = mask_protected_tokens(original);
-        assert!(masked.masked_string.contains("__PROTECTED_TOKEN_0__"));
-        assert!(masked.masked_string.contains("__PROTECTED_TOKEN_1__"));
-        assert!(masked.masked_string.contains("__PROTECTED_TOKEN_2__"));
+        assert!(masked.masked_string.contains("__PROTECTED_0__"));
+        assert!(masked.masked_string.contains("__PROTECTED_1__"));
+        assert!(masked.masked_string.contains("__PROTECTED_2__"));
 
         let restored = restore_protected_tokens(&masked.masked_string, &masked.placeholders);
         assert_eq!(restored, original);
+
+        // Test fuzzy LLM variations (e.g. missing underscores or case change like __PROTECTED0__)
+        // placeholders[0] = `ollama run gemma2`, placeholders[1] = `test`, placeholders[2] = https://example.com
+        let llm_altered = "Run __PROTECTED0__ or check __protected 2__ for __PROTECTED_1__ info.";
+        let fuzzy_restored = restore_protected_tokens(llm_altered, &masked.placeholders);
+        assert_eq!(fuzzy_restored, original);
+    }
+
+    #[test]
+    fn test_four_backticks_nested_markdown() {
+        let lines = vec![
+            "````".to_string(),
+            "# sample header".to_string(),
+            "".to_string(),
+            "this is sample code".to_string(),
+            "".to_string(),
+            "```bash".to_string(),
+            "sample command".to_string(),
+            "```".to_string(),
+            "````".to_string(),
+        ];
+
+        let blocks = build_chunk_blocks(&lines, 1, 1000);
+        // ```` and `# sample header` and `this is sample code` are Chunks for translation,
+        // while ```bash ... ``` is a protected CodeBlock
+        let code_blocks: Vec<&BlockItem> = blocks.iter().filter(|b| matches!(b, BlockItem::CodeBlock(_))).collect();
+        assert_eq!(code_blocks.len(), 1);
+        if let BlockItem::CodeBlock(ref content) = code_blocks[0] {
+            assert_eq!(content, "```bash\nsample command\n```");
+        }
     }
 }

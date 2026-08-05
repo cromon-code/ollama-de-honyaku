@@ -141,14 +141,14 @@ async fn translate_chunk(
             Strict Guidelines:\n\
             - Return ONLY the translation result. No explanations, intro/outro, or quote wrappers.\n\
             - Preserve original line breaks, markdown structure, code blocks, URLs, and formatting.\n\
-            - Do NOT translate or alter placeholders in the format `__PROTECTED_TOKEN_N__`.\n\
+            - Do NOT translate or alter placeholders in the format `__PROTECTED_N__`.\n\
             - Maintain style and tone accurately.",
             src_desc, config.target_lang
         ),
     };
 
-    if !masked_input.placeholders.is_empty() && !system_prompt.contains("__PROTECTED_TOKEN_") {
-        system_prompt.push_str("\n- Do NOT translate, alter, or omit placeholders in the format `__PROTECTED_TOKEN_N__`.");
+    if !masked_input.placeholders.is_empty() && !system_prompt.contains("__PROTECTED_") {
+        system_prompt.push_str("\n- Do NOT translate, alter, or omit placeholders in the format `__PROTECTED_N__`.");
     }
 
     let payload = OllamaChatRequest {
