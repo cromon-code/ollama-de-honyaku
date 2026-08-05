@@ -4,7 +4,10 @@ use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Emitter};
 use tokio::sync::watch;
 
-use crate::chunker::{build_chunk_blocks, parse_file_metadata, reconstruct_file, BlockItem};
+use crate::chunker::{
+    build_chunk_blocks, mask_protected_tokens, parse_file_metadata, reconstruct_file,
+    restore_protected_tokens, BlockItem,
+};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TranslationConfig {
@@ -127,7 +130,9 @@ async fn translate_chunk(
         config.source_lang.clone()
     };
 
-    let system_prompt = match &config.system_prompt {
+    let masked_input = mask_protected_tokens(text);
+
+    let mut system_prompt = match &config.system_prompt {
         Some(prompt) if !prompt.trim().is_empty() => prompt
             .replace("{source_lang}", &src_desc)
             .replace("{target_lang}", &config.target_lang),
@@ -136,10 +141,15 @@ async fn translate_chunk(
             Strict Guidelines:\n\
             - Return ONLY the translation result. No explanations, intro/outro, or quote wrappers.\n\
             - Preserve original line breaks, markdown structure, code blocks, URLs, and formatting.\n\
+            - Do NOT translate or alter placeholders in the format `__PROTECTED_TOKEN_N__`.\n\
             - Maintain style and tone accurately.",
             src_desc, config.target_lang
         ),
     };
+
+    if !masked_input.placeholders.is_empty() && !system_prompt.contains("__PROTECTED_TOKEN_") {
+        system_prompt.push_str("\n- Do NOT translate, alter, or omit placeholders in the format `__PROTECTED_TOKEN_N__`.");
+    }
 
     let payload = OllamaChatRequest {
         model: config.model.clone(),
@@ -150,7 +160,7 @@ async fn translate_chunk(
             },
             OllamaChatMessage {
                 role: "user".into(),
-                content: text.to_string(),
+                content: masked_input.masked_string,
             },
         ],
         stream: false,
@@ -176,7 +186,9 @@ async fn translate_chunk(
         .await
         .map_err(|e| format!("Failed to parse Ollama response ({})", e))?;
 
-    Ok(response_data.message.content)
+    let restored_content = restore_protected_tokens(&response_data.message.content, &masked_input.placeholders);
+
+    Ok(restored_content)
 }
 
 /// Call translate_chunk with automatic retry support (0..retry_count times)

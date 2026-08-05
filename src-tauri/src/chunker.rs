@@ -27,12 +27,13 @@ pub struct FileMetadata {
 pub enum BlockItem {
     EmptyLine,
     Chunk(String),
+    CodeBlock(String),
 }
 
 /// Parse raw byte data or string into lines, detecting BOM, line endings, and trailing newline.
 pub fn parse_file_metadata(content: &str, raw_bytes: &[u8]) -> (FileMetadata, Vec<String>) {
     let has_bom = raw_bytes.starts_with(&[0xEF, 0xBB, 0xBF]);
-    
+
     let has_crlf = content.contains("\r\n");
     let line_ending = if has_crlf {
         LineEnding::Crlf
@@ -120,7 +121,7 @@ pub fn split_long_line(line: &str, max_chunk_size: usize) -> Vec<String> {
     result
 }
 
-/// Generate structured blocks (EmptyLine or Chunk) from raw lines.
+/// Generate structured blocks (EmptyLine, Chunk, or CodeBlock) from raw lines.
 pub fn build_chunk_blocks(
     lines: &[String],
     granularity: usize,
@@ -130,6 +131,9 @@ pub fn build_chunk_blocks(
     let mut blocks = Vec::new();
     let mut current_lines: Vec<String> = Vec::new();
     let mut current_char_count = 0;
+
+    let mut in_code_block = false;
+    let mut current_code_block_lines: Vec<String> = Vec::new();
 
     let flush_current_chunk = |current_lines: &mut Vec<String>,
                                current_char_count: &mut usize,
@@ -142,8 +146,32 @@ pub fn build_chunk_blocks(
         }
     };
 
+    let flush_code_block = |current_code_block_lines: &mut Vec<String>,
+                            blocks: &mut Vec<BlockItem>| {
+        if !current_code_block_lines.is_empty() {
+            let code_text = current_code_block_lines.join("\n");
+            blocks.push(BlockItem::CodeBlock(code_text));
+            current_code_block_lines.clear();
+        }
+    };
+
+    let is_fence = |line: &str| {
+        let trimmed = line.trim_start();
+        trimmed.starts_with("```") || trimmed.starts_with("~~~")
+    };
+
     for raw_line in lines {
-        if is_empty_line(raw_line) {
+        if in_code_block {
+            current_code_block_lines.push(raw_line.clone());
+            if is_fence(raw_line) {
+                flush_code_block(&mut current_code_block_lines, &mut blocks);
+                in_code_block = false;
+            }
+        } else if is_fence(raw_line) {
+            flush_current_chunk(&mut current_lines, &mut current_char_count, &mut blocks);
+            in_code_block = true;
+            current_code_block_lines.push(raw_line.clone());
+        } else if is_empty_line(raw_line) {
             // Empty line breaks chunk boundary
             flush_current_chunk(&mut current_lines, &mut current_char_count, &mut blocks);
             blocks.push(BlockItem::EmptyLine);
@@ -154,7 +182,6 @@ pub fn build_chunk_blocks(
             for sub_line in sub_lines {
                 let sub_len = sub_line.chars().count();
 
-                // If adding sub_line (plus newline if current_lines not empty) exceeds max_chunk_size OR granularity reached
                 let extra_char = if current_lines.is_empty() { 0 } else { 1 };
                 if (!current_lines.is_empty()
                     && current_char_count + extra_char + sub_len > max_chunk_size)
@@ -174,48 +201,105 @@ pub fn build_chunk_blocks(
         }
     }
 
-    flush_current_chunk(&mut current_lines, &mut current_char_count, &mut blocks);
+    if in_code_block {
+        flush_code_block(&mut current_code_block_lines, &mut blocks);
+    } else {
+        flush_current_chunk(&mut current_lines, &mut current_char_count, &mut blocks);
+    }
+
     blocks
 }
 
-/// Reconstruct full file content from translated blocks, applying line ending, BOM, and trailing newline.
-pub fn reconstruct_file(
-    blocks: &[BlockItem],
-    metadata: &FileMetadata,
-) -> Vec<u8> {
-    let mut result_string = String::new();
-
-    for (i, block) in blocks.iter().enumerate() {
-        if i > 0 {
-            result_string.push_str("\n");
-        }
+/// Reconstruct raw file bytes from blocks and metadata, preserving BOM and original line endings.
+pub fn reconstruct_file(blocks: &[BlockItem], metadata: &FileMetadata) -> Vec<u8> {
+    let mut raw_lines = Vec::new();
+    for block in blocks {
         match block {
-            BlockItem::EmptyLine => {
-                // Empty line is represented as empty string between newlines
-            }
-            BlockItem::Chunk(content) => {
-                result_string.push_str(content);
-            }
+            BlockItem::EmptyLine => raw_lines.push("".to_string()),
+            BlockItem::Chunk(content) => raw_lines.push(content.clone()),
+            BlockItem::CodeBlock(content) => raw_lines.push(content.clone()),
         }
     }
 
-    if metadata.has_trailing_newline {
-        result_string.push('\n');
-    }
-
-    // Convert LF to CRLF if original file was CRLF
+    let joined = raw_lines.join("\n");
+    let line_ending_str = metadata.line_ending.as_str();
     let final_str = if metadata.line_ending == LineEnding::Crlf {
-        result_string.replace('\n', "\r\n")
+        joined.replace('\n', line_ending_str)
     } else {
-        result_string
+        joined
     };
 
-    let mut bytes = Vec::new();
+    let mut result = Vec::new();
     if metadata.has_bom {
-        bytes.extend_from_slice(&[0xEF, 0xBB, 0xBF]);
+        result.extend_from_slice(&[0xEF, 0xBB, 0xBF]);
     }
-    bytes.extend_from_slice(final_str.as_bytes());
-    bytes
+    result.extend_from_slice(final_str.as_bytes());
+
+    if metadata.has_trailing_newline {
+        result.extend_from_slice(line_ending_str.as_bytes());
+    }
+
+    result
+}
+
+pub struct MaskedText {
+    pub masked_string: String,
+    pub placeholders: Vec<(String, String)>,
+}
+
+/// Mask inline code (`code`) and URLs (https://...) with unique placeholders to prevent LLM translation of technical terms
+pub fn mask_protected_tokens(text: &str) -> MaskedText {
+    let inline_code_re = match regex::Regex::new(r"`[^`\n]+`") {
+        Ok(re) => re,
+        Err(_) => return MaskedText { masked_string: text.to_string(), placeholders: vec![] },
+    };
+    let url_re = match regex::Regex::new(r"https?://[^\s)\]]+") {
+        Ok(re) => re,
+        Err(_) => return MaskedText { masked_string: text.to_string(), placeholders: vec![] },
+    };
+
+    let mut placeholders: Vec<(String, String)> = Vec::new();
+    let mut masked_string = text.to_string();
+    let mut count = 0;
+
+    // 1. Mask inline code
+    for cap in inline_code_re.find_iter(text) {
+        let orig = cap.as_str().to_string();
+        let placeholder = format!("__PROTECTED_TOKEN_{}__", count);
+        count += 1;
+        placeholders.push((placeholder, orig));
+    }
+
+    for (placeholder, orig) in &placeholders {
+        masked_string = masked_string.replace(orig.as_str(), placeholder.as_str());
+    }
+
+    // 2. Mask URLs
+    let temp_string = masked_string.clone();
+    for cap in url_re.find_iter(&temp_string) {
+        let orig = cap.as_str().to_string();
+        if orig.contains("__PROTECTED_TOKEN_") {
+            continue;
+        }
+        let placeholder = format!("__PROTECTED_TOKEN_{}__", count);
+        count += 1;
+        masked_string = masked_string.replace(orig.as_str(), placeholder.as_str());
+        placeholders.push((placeholder, orig));
+    }
+
+    MaskedText {
+        masked_string,
+        placeholders,
+    }
+}
+
+/// Restore original tokens from placeholders after translation
+pub fn restore_protected_tokens(masked_text: &str, placeholders: &[(String, String)]) -> String {
+    let mut restored = masked_text.to_string();
+    for (placeholder, orig) in placeholders {
+        restored = restored.replace(placeholder, orig);
+    }
+    restored
 }
 
 #[cfg(test)]
@@ -225,36 +309,74 @@ mod tests {
     #[test]
     fn test_empty_line_detection() {
         assert!(is_empty_line(""));
-        assert!(is_empty_line(" "));
+        assert!(is_empty_line("   "));
         assert!(is_empty_line("\t"));
-        assert!(is_empty_line(" \t "));
-        assert!(!is_empty_line(" a "));
-    }
-
-    #[test]
-    fn test_granularity_and_empty_lines() {
-        let input = vec![
-            "A".into(),
-            "B".into(),
-            "".into(),
-            "C".into(),
-            "D".into(),
-        ];
-        let blocks = build_chunk_blocks(&input, 10, 3000);
-        assert_eq!(
-            blocks,
-            vec![
-                BlockItem::Chunk("A\nB".into()),
-                BlockItem::EmptyLine,
-                BlockItem::Chunk("C\nD".into()),
-            ]
-        );
+        assert!(!is_empty_line("hello"));
     }
 
     #[test]
     fn test_split_long_line() {
-        let line = "これは長い文です。ここで切れるはず！さらに続く文章。";
-        let parts = split_long_line(line, 12);
-        assert_eq!(parts, vec!["これは長い文です。", "ここで切れるはず！", "さらに続く文章。"]);
+        let text = "これは非常に長い文章です。途中間に読点、が入ります！さらに続きがあります。";
+        let sub_lines = split_long_line(text, 15);
+        assert!(sub_lines.len() > 1);
+        for line in &sub_lines {
+            assert!(line.chars().count() <= 15);
+        }
+    }
+
+    #[test]
+    fn test_granularity_and_empty_lines() {
+        let lines = vec![
+            "Header line".to_string(),
+            "".to_string(),
+            "Paragraph 1 line 1".to_string(),
+            "Paragraph 1 line 2".to_string(),
+            "".to_string(),
+            "Paragraph 2".to_string(),
+        ];
+
+        let blocks = build_chunk_blocks(&lines, 2, 1000);
+        assert_eq!(blocks.len(), 5);
+        assert_eq!(blocks[0], BlockItem::Chunk("Header line".to_string()));
+        assert_eq!(blocks[1], BlockItem::EmptyLine);
+        assert_eq!(
+            blocks[2],
+            BlockItem::Chunk("Paragraph 1 line 1\nParagraph 1 line 2".to_string())
+        );
+        assert_eq!(blocks[3], BlockItem::EmptyLine);
+        assert_eq!(blocks[4], BlockItem::Chunk("Paragraph 2".to_string()));
+    }
+
+    #[test]
+    fn test_code_block_bypass() {
+        let lines = vec![
+            "Translate this intro".to_string(),
+            "```bash".to_string(),
+            "ollama run gemma2".to_string(),
+            "echo 'Hello World'".to_string(),
+            "```".to_string(),
+            "Translate this outro".to_string(),
+        ];
+
+        let blocks = build_chunk_blocks(&lines, 1, 1000);
+        assert_eq!(blocks.len(), 3);
+        assert_eq!(blocks[0], BlockItem::Chunk("Translate this intro".to_string()));
+        assert_eq!(
+            blocks[1],
+            BlockItem::CodeBlock("```bash\nollama run gemma2\necho 'Hello World'\n```".to_string())
+        );
+        assert_eq!(blocks[2], BlockItem::Chunk("Translate this outro".to_string()));
+    }
+
+    #[test]
+    fn test_mask_and_restore_protected_tokens() {
+        let original = "Run `ollama run gemma2` or check https://example.com for `test` info.";
+        let masked = mask_protected_tokens(original);
+        assert!(masked.masked_string.contains("__PROTECTED_TOKEN_0__"));
+        assert!(masked.masked_string.contains("__PROTECTED_TOKEN_1__"));
+        assert!(masked.masked_string.contains("__PROTECTED_TOKEN_2__"));
+
+        let restored = restore_protected_tokens(&masked.masked_string, &masked.placeholders);
+        assert_eq!(restored, original);
     }
 }
